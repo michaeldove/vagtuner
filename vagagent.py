@@ -3,108 +3,143 @@ import array
 import can
 from can import Message
 
-can_interface = 'vcan0'
-tester_can_id = 0x200
-ecu_logical_address = 0x01
-setup_request_opcode = 0xc0
-setup_response_opcode = 0xd0
-can_id_invalid_mask = 0x10
-my_vwtp_can_id = 0x740
-dest_vwtp_can_id = 0x0
-kwp2000_app_type = 0x01
-vwtp_opcode_last_packet_ack = 0x1
-vwtp_opcode_more_packets_noack = 0x2
-
+####################################
+# Addressing
+####################################
+TESTER_CAN_ID = 0x200
+ECU_LOGICAL_ADDRESS = 0x01
+MY_VWTP_CAN_ID = 0x740
 ####################################
 # KWP ECU Identification
 ####################################
-kwp_read_ecu_identification_opcode = 0x1a
-kwp_read_ecu_identification_resp_opcode = 0x5a
-kwp_extended_ecu_ident_param = 0x86
-kwp_item_number_param = 0x9b
-kwp_immo_param = 0x92
-kwp_software_version_param = 0x95
-kwp_engine_type_param = 0x97
-kwp_vin_param = 0x90
+# Opcodes
+KWP_READ_ECU_IDENTIFICATION_OPCODE = 0x1a
+KWP_READ_ECU_IDENTIFICATION_RESP_OPCODE = 0x5a
+# Parameters
+KWP_EXTENDED_ECU_IDENT_PARAM = 0x86
+KWP_ITEM_NUMBER_PARAM = 0x9b
+KWP_IMMO_PARAM = 0x92
+KWP_SOFTWARE_VERSION_PARAM = 0x95
+KWP_ENGINE_TYPE_PARAM = 0x97
+KWP_VIN_PARAM = 0x90
 ####################################
+# VWTP
+####################################
+SETUP_REQUEST_OPCODE = 0xc0
+SETUP_RESPONSE_OPCODE = 0xd0
+VWTP_OPCODE_LAST_PACKET_ACK = 0x1
+VWTP_OPCODE_MORE_PACKETS_NOACK = 0x2
+CAN_ID_INVALID_MASK = 0x10
+VWTP_PAYLOAD_INDEX = 3
+VWTP_FRAME_LENGTH = 8
+VWTP_FRAME_HEADER_LENGTH = 1
+VWTP_FRAME_HEADER_FIRST_LENGTH = 3
+KWP2000_APP_TYPE = 0x01
 
-vwtp_first_preamble_length = 3
-vwtp_consecutive_preamble_length = 1
-vwtp_payload_index = 3
-max_frame_length = 8
-ecu_id = "A1234567890"
+####################################
+# Variables
+####################################
+can_interface = 'vcan0'
+dest_vwtp_can_id = 0x0
+vag_part_number = '8P0907115AQ'
+engine = '2.0l R4/4V TFSI'
 
-def send_item_number(bus):
-  payload = ecu_id
-  payload_len = len(payload)
-  remaining_len = payload_len
+
+class KWP2000Message(object):
+    def __init__(self, opcode, param, data):
+	self.opcode = opcode
+	self.param = param
+	self.data = data
+    
+    def bytes(self):
+	return bytearray([self.opcode, self.param]) + self.data
+	
+def send_vwtp(bus, message):
   seq = 0
-  payload_index = 0
-  while remaining_len:
-    available_payload_space = None
+  payload_start_index = 0
+  payload = message.bytes()
+  message_length = len(payload)
+  remaining_length = message_length
+
+  while remaining_length:
+    vwtp_header_length = VWTP_FRAME_HEADER_LENGTH
     first_frame = seq == 0
     if first_frame:
-      available_payload_space = max_frame_length - vwtp_first_preamble_length
-    else:
-      available_payload_space = max_frame_length - vwtp_consecutive_preamble_length
-    payload_end_index = min(payload_index + remaining_len, payload_index + available_payload_space)
-    last_frame = available_payload_space >= remaining_len
-    opcode = vwtp_opcode_more_packets_noack
-    if last_frame:
-      opcode = vwtp_opcode_last_packet_ack
-    first_byte = opcode << 4 | seq
-    data = None
+      vwtp_header_length = VWTP_FRAME_HEADER_FIRST_LENGTH
+    vwtp_payload_length = VWTP_FRAME_LENGTH - vwtp_header_length
+    last_frame = vwtp_payload_length >= remaining_length
 
-    frame_payload = payload[payload_index:payload_end_index]
-    frame_payload_bytes = list(array.array('B', frame_payload))
+    opcode = VWTP_OPCODE_MORE_PACKETS_NOACK
+    if last_frame:
+      opcode = VWTP_OPCODE_LAST_PACKET_ACK
+    first_byte = opcode << 4 | seq
+
+    data = bytearray([first_byte])
     if first_frame:
-      data = [first_byte, 0x00, payload_len, kwp_read_ecu_identification_resp_opcode, kwp_item_number_param] + frame_payload_bytes
-    else:
-      data = [first_byte] + frame_payload_bytes
+      data += bytearray([0x00, message_length])
+
+    payload_end_index = payload_start_index + vwtp_payload_length
+    frame_payload_bytes = payload[payload_start_index:payload_end_index]
+    data += frame_payload_bytes
+
     message = Message(extended_id=False,
                       arbitration_id=dest_vwtp_can_id,
                       data=data)
     bus.send(message)
-    remaining_len = remaining_len - len(frame_payload)
-    seq = seq+1
+    remaining_length -= len(frame_payload_bytes)
+    payload_start_index += len(frame_payload_bytes)
+    seq = (seq + 1) & 0xf
 
-
+def send_item_number(bus):
+  # length = 46
+  data = bytearray(46)
+  values = ["{:<11}".format(vag_part_number),
+	    0x20,0x30,0x30,0x31,0x30,0x10,0x00,
+	    0x00,0x00,0x00,0x01,0x02,0x03,0x04,0x05,
+	    "{:<20}".format(engine)]
+  struct.pack_into('11sBBBBBBBBBBBBBBB20s', data, 0, *values)
+  message = KWP2000Message(
+	      KWP_READ_ECU_IDENTIFICATION_RESP_OPCODE,
+	      KWP_ITEM_NUMBER_PARAM,
+	      data)
+  send_vwtp(bus, message)
+	      
     
 
 bus = can.interface.Bus(can_interface, bustype='socketcan')
 for message in bus:
   msg_can_id = message.arbitration_id
   data = message.data
-  if msg_can_id == tester_can_id:
+  if msg_can_id == TESTER_CAN_ID:
     # we're in raw can frame mode with a tester connected
-    if data[0] == ecu_logical_address:
+    if data[0] == ECU_LOGICAL_ADDRESS:
       # OK, the tester is talking to us (ECU)
-      if data[1] == setup_request_opcode:
-        dest_vwtp_can_id_invalid = data[5] & can_id_invalid_mask
+      if data[1] == SETUP_REQUEST_OPCODE:
+        dest_vwtp_can_id_invalid = data[5] & CAN_ID_INVALID_MASK
         if dest_vwtp_can_id_invalid:
           print "Error: Invalid destination VWTP CAN ID."
           continue
         dest_vwtp_can_id = struct.unpack('<H', data[4:6])[0]
-        if data[6] != kwp2000_app_type:
+        if data[6] != KWP2000_APP_TYPE:
           print "Error: Expecting KWP2000 app type."
           continue
         response_data = [0x00, 
-                         setup_response_opcode, 
+                         SETUP_RESPONSE_OPCODE, 
                          dest_vwtp_can_id & 0xff, 
                          dest_vwtp_can_id >> 8, 
-                         my_vwtp_can_id & 0xff, 
-                         my_vwtp_can_id >> 8,
-                         kwp2000_app_type]
+                         MY_VWTP_CAN_ID & 0xff, 
+                         MY_VWTP_CAN_ID >> 8,
+                         KWP2000_APP_TYPE]
         message = Message(extended_id=False,
-                          arbitration_id=tester_can_id+1,
+                          arbitration_id=TESTER_CAN_ID+1,
                           data=response_data) 
         bus.send(message)
         continue
-  if msg_can_id == my_vwtp_can_id:
+  if msg_can_id == MY_VWTP_CAN_ID:
     # we're a VWTP session
     vwtp_opcode = data[0] >> 4
     vwtp_seq = data[0] & 0xf
-    if vwtp_opcode == vwtp_opcode_last_packet_ack:
+    if vwtp_opcode == VWTP_OPCODE_LAST_PACKET_ACK:
       # Act on packet and respond with ack
       vwtp_next_seq = (vwtp_seq + 1) & 0xf
       message = Message(extended_id=False,
@@ -113,11 +148,9 @@ for message in bus:
       bus.send(message)
       if vwtp_seq == 0:
         payload_len = data[2] # refactor this to a intermessage context
-        kwp_payload = data[vwtp_payload_index:vwtp_payload_index+payload_len]
+        kwp_payload = data[VWTP_PAYLOAD_INDEX:VWTP_PAYLOAD_INDEX+payload_len]
         kwp_opcode = kwp_payload[0]
         kwp_param = kwp_payload[1]
-        if kwp_opcode == kwp_read_ecu_identification_opcode:
-          if kwp_param == kwp_item_number_param:
+        if kwp_opcode == KWP_READ_ECU_IDENTIFICATION_OPCODE:
+          if kwp_param == KWP_ITEM_NUMBER_PARAM:
             send_item_number(bus)
-  print message
-
