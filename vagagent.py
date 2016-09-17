@@ -47,64 +47,64 @@ engine = '2.0l R4/4V TFSI'
 
 class KWP2000Message(object):
     def __init__(self, opcode, param, data):
-	self.opcode = opcode
-	self.param = param
-	self.data = data
+        self.opcode = opcode
+        self.param = param
+        self.data = data
     
     def bytes(self):
-	return bytearray([self.opcode, self.param]) + self.data
-	
+        return bytearray([self.opcode, self.param]) + self.data
+    
 def send_vwtp(bus, message):
-  seq = 0
-  payload_start_index = 0
-  payload = message.bytes()
-  message_length = len(payload)
-  remaining_length = message_length
+    seq = 0
+    payload_start_index = 0
+    payload = message.bytes()
+    message_length = len(payload)
+    remaining_length = message_length
 
-  while remaining_length:
-    vwtp_header_length = VWTP_FRAME_HEADER_LENGTH
-    first_frame = seq == 0
-    if first_frame:
-      vwtp_header_length = VWTP_FRAME_HEADER_FIRST_LENGTH
-    vwtp_payload_length = VWTP_FRAME_LENGTH - vwtp_header_length
-    last_frame = vwtp_payload_length >= remaining_length
+    while remaining_length:
+        vwtp_header_length = VWTP_FRAME_HEADER_LENGTH
+        first_frame = seq == 0
+        if first_frame:
+            vwtp_header_length = VWTP_FRAME_HEADER_FIRST_LENGTH
+        vwtp_payload_length = VWTP_FRAME_LENGTH - vwtp_header_length
+        last_frame = vwtp_payload_length >= remaining_length
 
-    opcode = VWTP_OPCODE_MORE_PACKETS_NOACK
-    if last_frame:
-      opcode = VWTP_OPCODE_LAST_PACKET_ACK
-    first_byte = opcode << 4 | seq
+        opcode = VWTP_OPCODE_MORE_PACKETS_NOACK
+        if last_frame:
+            opcode = VWTP_OPCODE_LAST_PACKET_ACK
+        first_byte = opcode << 4 | seq
 
-    data = bytearray([first_byte])
-    if first_frame:
-      data += bytearray([0x00, message_length])
+        data = bytearray([first_byte])
+        if first_frame:
+            data += bytearray([0x00, message_length])
 
-    payload_end_index = payload_start_index + vwtp_payload_length
-    frame_payload_bytes = payload[payload_start_index:payload_end_index]
-    data += frame_payload_bytes
+        payload_end_index = payload_start_index + vwtp_payload_length
+        frame_payload_bytes = payload[payload_start_index:payload_end_index]
+        data += frame_payload_bytes
 
-    message = Message(extended_id=False,
-                      arbitration_id=dest_vwtp_can_id,
-                      data=data)
-    bus.send(message)
-    remaining_length -= len(frame_payload_bytes)
-    payload_start_index += len(frame_payload_bytes)
-    seq = (seq + 1) & 0xf
+        message = Message(extended_id=False,
+                          arbitration_id=dest_vwtp_can_id,
+                          data=data)
+        bus.send(message)
+        remaining_length -= len(frame_payload_bytes)
+        payload_start_index += len(frame_payload_bytes)
+        seq = (seq + 1) & 0xf
 
 def send_item_number(bus):
-  # length = 46
-  data = bytearray(46)
-  values = ["{:<11}".format(vag_part_number),
-	    0x20,0x30,0x30,0x31,0x30,0x10,0x00,
-	    0x00,0x00,0x00,0x01,0x02,0x03,0x04,0x05,
-	    "{:<20}".format(engine)]
-  struct.pack_into('11sBBBBBBBBBBBBBBB20s', data, 0, *values)
-  message = KWP2000Message(
-	      KWP_READ_ECU_IDENTIFICATION_RESP_OPCODE,
-	      KWP_ITEM_NUMBER_PARAM,
-	      data)
-  send_vwtp(bus, message)
-	      
-    
+    # length = 46
+    data = bytearray(46)
+    values = ["{:<11}".format(vag_part_number),
+        0x20,0x30,0x30,0x31,0x30,0x10,0x00,
+        0x00,0x00,0x00,0x01,0x02,0x03,0x04,0x05,
+        "{:<20}".format(engine)]
+    struct.pack_into('11sBBBBBBBBBBBBBBB20s', data, 0, *values)
+    message = KWP2000Message(
+        KWP_READ_ECU_IDENTIFICATION_RESP_OPCODE,
+        KWP_ITEM_NUMBER_PARAM,
+        data)
+    send_vwtp(bus, message)
+          
+
 
 bus = can.interface.Bus(can_interface, bustype='socketcan')
 for message in bus:
@@ -140,17 +140,17 @@ for message in bus:
     vwtp_opcode = data[0] >> 4
     vwtp_seq = data[0] & 0xf
     if vwtp_opcode == VWTP_OPCODE_LAST_PACKET_ACK:
-      # Act on packet and respond with ack
-      vwtp_next_seq = (vwtp_seq + 1) & 0xf
-      message = Message(extended_id=False,
-                        arbitration_id=dest_vwtp_can_id,
-                        data=[0xb0 + vwtp_next_seq])
-      bus.send(message)
-      if vwtp_seq == 0:
-        payload_len = data[2] # refactor this to a intermessage context
-        kwp_payload = data[VWTP_PAYLOAD_INDEX:VWTP_PAYLOAD_INDEX+payload_len]
-        kwp_opcode = kwp_payload[0]
-        kwp_param = kwp_payload[1]
-        if kwp_opcode == KWP_READ_ECU_IDENTIFICATION_OPCODE:
-          if kwp_param == KWP_ITEM_NUMBER_PARAM:
-            send_item_number(bus)
+        # Act on packet and respond with ack
+        vwtp_next_seq = (vwtp_seq + 1) & 0xf
+        message = Message(extended_id=False,
+        arbitration_id=dest_vwtp_can_id,
+        data=[0xb0 + vwtp_next_seq])
+        bus.send(message)
+        if vwtp_seq == 0:
+            payload_len = data[2] # refactor this to a intermessage context
+            kwp_payload = data[VWTP_PAYLOAD_INDEX:VWTP_PAYLOAD_INDEX+payload_len]
+            kwp_opcode = kwp_payload[0]
+            kwp_param = kwp_payload[1]
+            if kwp_opcode == KWP_READ_ECU_IDENTIFICATION_OPCODE:
+                if kwp_param == KWP_ITEM_NUMBER_PARAM:
+                    send_item_number(bus)
